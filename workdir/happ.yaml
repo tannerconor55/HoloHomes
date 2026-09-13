@@ -1,0 +1,18 @@
+manifest_version: '0'
+name: holo_airbnb
+description: Peer-to-peer rental bookings with geohash and H3 search, and Flowsta Vault sign-in
+roles:
+- name: rentals
+  provisioning:
+    strategy: create
+    deferred: false
+  dna:
+    path: ../dnas/rentals/workdir/rentals.dna
+    modifiers:
+      network_seed: null
+      properties: null
+    installed_hash: null
+    clone_limit: 0
+allow_deferred_memproofs: false
+bootstrap_url: null
+relay_url: null

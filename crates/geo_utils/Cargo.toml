@@ -1,0 +1,9 @@
+[package]
+name = "geo_utils"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+h3o = { workspace = true }
+geohash = { workspace = true }

@@ -1,0 +1,17 @@
+[package]
+name = "agent_linking"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+name = "agent_linking"
+
+[dependencies]
+hdk = { workspace = true }
+serde = { workspace = true }
+serde_bytes = { workspace = true }
+holochain_serialized_bytes = { workspace = true }
+
+agent_linking_integrity = { workspace = true }

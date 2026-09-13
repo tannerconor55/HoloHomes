@@ -1,0 +1,15 @@
+[package]
+name = "rentals_integrity"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+name = "rentals_integrity"
+
+[dependencies]
+hdi = { workspace = true }
+serde = { workspace = true }
+holochain_serialized_bytes = { workspace = true }
+geo_utils = { workspace = true }
+identity_attestation = { workspace = true }

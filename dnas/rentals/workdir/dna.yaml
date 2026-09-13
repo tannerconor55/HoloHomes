@@ -1,0 +1,27 @@
+manifest_version: '0'
+name: rentals
+integrity:
+  network_seed: null
+  properties: null
+  zomes:
+  - name: rentals_integrity
+    hash: null
+    path: ../../../target/wasm32-unknown-unknown/release/rentals_integrity.wasm
+    dependencies: null
+  - name: agent_linking_integrity
+    hash: null
+    path: ../../../target/wasm32-unknown-unknown/release/agent_linking_integrity.wasm
+    dependencies: null
+coordinator:
+  zomes:
+  - name: rentals
+    hash: null
+    path: ../../../target/wasm32-unknown-unknown/release/rentals.wasm
+    dependencies:
+    - name: rentals_integrity
+  # Named `agent_linking` because @flowsta/holochain calls `agent_linking/get_linked_agents`.
+  - name: agent_linking
+    hash: null
+    path: ../../../target/wasm32-unknown-unknown/release/agent_linking.wasm
+    dependencies:
+    - name: agent_linking_integrity

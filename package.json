@@ -1,0 +1,24 @@
+{
+  "name": "holo-airbnb-dev",
+  "private": true,
+  "workspaces": [
+    "ui"
+  ],
+  "scripts": {
+    "start": "AGENTS=${AGENTS:-2} npm run network",
+    "network": "hc sandbox clean && npm run build:happ && UI_PORT=$(get-port) concurrently -k \"npm run start --workspace ui\" \"npm run launch:happ\"",
+    "launch:happ": "bash scripts/launch-happ.sh -n $AGENTS --ui-port $UI_PORT workdir/holo_airbnb.happ",
+    "build:zomes": "RUSTFLAGS='--cfg getrandom_backend=\"custom\"' cargo build --release --target wasm32-unknown-unknown",
+    "build:happ": "npm run build:zomes && hc app pack workdir --recursive",
+    "test:geo": "cargo test -p geo_utils",
+    "test": "npm run build:happ && cargo test"
+  },
+  "devDependencies": {
+    "@holochain/hc-spin": "^0.700.0",
+    "concurrently": "^10.0.5",
+    "get-port-cli": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  }
+}

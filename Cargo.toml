@@ -1,0 +1,48 @@
+[profile.dev]
+opt-level = "z"
+
+[profile.release]
+opt-level = "z"
+
+[workspace]
+members = [
+  "crates/*",
+  "dnas/*/zomes/coordinator/*",
+  "dnas/*/zomes/integrity/*",
+]
+resolver = "2"
+
+[workspace.dependencies]
+hdi = "=0.8.0"
+hdk = "=0.7.0"
+holochain_serialized_bytes = "*"
+serde = "1.0"
+serde_bytes = "0.11"
+tokio = "1.49"
+ed25519-dalek = "2"
+# Both geo crates run inside validation, so they are pinned exactly:
+# bumping either one changes the DNA hash.
+h3o = { version = "=0.11.0", default-features = false }
+geohash = "=0.13.2"
+
+[workspace.dependencies.holochain]
+default-features = false
+version = "0.7.0"
+
+[workspace.dependencies.geo_utils]
+path = "crates/geo_utils"
+
+[workspace.dependencies.identity_attestation]
+path = "crates/identity_attestation"
+
+[workspace.dependencies.rentals]
+path = "dnas/rentals/zomes/coordinator/rentals"
+
+[workspace.dependencies.rentals_integrity]
+path = "dnas/rentals/zomes/integrity/rentals"
+
+[workspace.dependencies.agent_linking]
+path = "dnas/rentals/zomes/coordinator/agent_linking"
+
+[workspace.dependencies.agent_linking_integrity]
+path = "dnas/rentals/zomes/integrity/agent_linking"
