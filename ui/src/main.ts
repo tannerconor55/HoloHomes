@@ -494,6 +494,7 @@ async function renderResults(matches: ListingMatch[]) {
                   src="${esc(photo.url)}"
                   alt="${esc(photo.caption || listing.title)}"
                   data-photo-index="${index}"
+                  draggable="false"
                   loading="${index === 0 ? 'eager' : 'lazy'}"
                 />
               `,
@@ -506,7 +507,12 @@ async function renderResults(matches: ListingMatch[]) {
           `;
 
       return `
-        <article class="card listing-card${bookedNow ? ' currently-booked' : ''}" data-listing="${hash}">
+        <article
+          class="card listing-card${bookedNow ? ' currently-booked' : ''}"
+          data-listing="${hash}"
+          tabindex="0"
+          aria-label="View listing: ${esc(listing.title)}"
+        >
           <div class="listing-card-gallery" data-photo-index="0">
             <div class="listing-card-slides">
               ${photoSlides}
@@ -559,13 +565,7 @@ async function renderResults(matches: ListingMatch[]) {
               <span class="listing-card-availability">
                 ${bookedNow ? 'Currently booked' : 'Available'}
               </span>
-
-              <button type="button" data-action="open-detail">
-                View listing
-              </button>
             </div>
-
-
           </div>
         </article>`;
     }),
@@ -845,6 +845,63 @@ async function openListingDetail(listingHash: string) {
   }
 }
 
+const INTERACTIVE_SELECTOR = 'button, a, input, select, textarea, label, summary, [contenteditable]';
+const SWIPE_THRESHOLD_PX = 40;
+
+let suppressCardClickUntil = 0;
+let photoSwipe: { gallery: HTMLElement; pointerId: number; x: number; y: number } | null = null;
+
+function stepCardPhoto(gallery: HTMLElement, direction: 1 | -1) {
+  const slides = gallery.querySelectorAll<HTMLImageElement>('.listing-card-slide');
+  if (slides.length < 2) return;
+
+  const current = Number(gallery.dataset.photoIndex ?? '0');
+  const next = (current + direction + slides.length) % slides.length;
+
+  slides[current].classList.remove('active');
+  slides[next].classList.add('active');
+  gallery.dataset.photoIndex = String(next);
+
+  const counter = gallery.querySelector<HTMLElement>('.listing-photo-count');
+  if (counter) {
+    counter.textContent = `${next + 1} / ${slides.length}`;
+  }
+}
+
+$('#results').addEventListener('pointerdown', (event) => {
+  const target = event.target as HTMLElement;
+  if (!event.isPrimary || target.closest('button')) return;
+  const gallery = target.closest<HTMLElement>('.listing-card-gallery');
+  if (!gallery || gallery.querySelectorAll('.listing-card-slide').length < 2) return;
+  photoSwipe = { gallery, pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+});
+
+$('#results').addEventListener('pointerup', (event) => {
+  if (!photoSwipe || event.pointerId !== photoSwipe.pointerId) return;
+  const { gallery, x, y } = photoSwipe;
+  photoSwipe = null;
+
+  const dx = event.clientX - x;
+  const dy = event.clientY - y;
+  if (Math.abs(dx) < SWIPE_THRESHOLD_PX || Math.abs(dx) <= Math.abs(dy)) return;
+
+  stepCardPhoto(gallery, dx < 0 ? 1 : -1);
+  suppressCardClickUntil = Date.now() + 400;
+});
+
+// The browser took over the gesture (e.g. a vertical scroll), so it isn't a swipe.
+$('#results').addEventListener('pointercancel', () => {
+  photoSwipe = null;
+});
+
+$('#results').addEventListener('keydown', (event) => {
+  const card = event.target as HTMLElement;
+  if (!card.matches('.listing-card[data-listing]')) return;
+  if (event.key !== 'Enter' && event.key !== ' ') return;
+  event.preventDefault();
+  void openListingDetail(card.dataset.listing!);
+});
+
 $('#results').addEventListener('click', (event) => {
   const target = event.target as HTMLElement;
   const actionButton = target.closest<HTMLButtonElement>('button[data-action]');
@@ -855,31 +912,18 @@ $('#results').addEventListener('click', (event) => {
     actionButton?.dataset.action === 'previous-photo' ||
     actionButton?.dataset.action === 'next-photo'
   ) {
-    const card = actionButton.closest<HTMLElement>('.listing-card');
-    const gallery = card?.querySelector<HTMLElement>('.listing-card-gallery');
-    const slides = gallery?.querySelectorAll<HTMLImageElement>('.listing-card-slide');
-
-    if (!gallery || !slides || slides.length < 2) return;
-
-    const current = Number(gallery.dataset.photoIndex ?? '0');
-    const direction = actionButton.dataset.action === 'next-photo' ? 1 : -1;
-    const next = (current + direction + slides.length) % slides.length;
-
-    slides[current].classList.remove('active');
-    slides[next].classList.add('active');
-    gallery.dataset.photoIndex = String(next);
-
-    const counter = gallery.querySelector<HTMLElement>('.listing-photo-count');
-    if (counter) {
-      counter.textContent = `${next + 1} / ${slides.length}`;
-    }
-
+    const gallery = actionButton.closest<HTMLElement>('.listing-card-gallery');
+    if (gallery) stepCardPhoto(gallery, actionButton.dataset.action === 'next-photo' ? 1 : -1);
     return;
   }
 
-  if (actionButton?.dataset.action === 'open-detail') {
-    const listingHash = actionButton.closest<HTMLElement>('[data-listing]')?.dataset.listing;
-    if (listingHash) void openListingDetail(listingHash);
+  const card = target.closest<HTMLElement>('.listing-card[data-listing]');
+  if (card && !target.closest(INTERACTIVE_SELECTOR)) {
+    // A swipe that ends over the card still produces a click; don't treat it as one.
+    if (Date.now() < suppressCardClickUntil) return;
+    // Let people select text on the card without navigating away.
+    if (window.getSelection()?.toString()) return;
+    void openListingDetail(card.dataset.listing!);
     return;
   }
 

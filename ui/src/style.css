@@ -364,6 +364,18 @@ details summary { cursor: pointer; font-size: 0.85rem; }
   gap: 0;
   overflow: hidden;
   padding: 0;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.listing-card:hover {
+  border-color: #cfc8ba;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+}
+
+.listing-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .listing-card-gallery {
@@ -371,6 +383,9 @@ details summary { cursor: pointer; font-size: 0.85rem; }
   min-width: 0;
   background: var(--surface-muted, #f3f1ec);
   overflow: hidden;
+  /* Horizontal drags are handled as photo swipes; vertical ones still scroll the page. */
+  touch-action: pan-y;
+  user-select: none;
 }
 
 .listing-card-slides {
