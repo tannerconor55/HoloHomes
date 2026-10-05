@@ -4,7 +4,6 @@ import './style.css';
 import { decodeHashFromBase64, encodeHashToBase64, type ActionHash } from '@holochain/client';
 import { cellToBoundary } from 'h3-js';
 import L from 'leaflet';
-
 import {
   Api,
   decodeEntry,
@@ -13,11 +12,13 @@ import {
   type GeoPoint,
   type Listing,
   type ListingMatch,
+  type ListingPhoto,
   type ListingView,
   type RatingOverview,
   type SearchMethod,
 } from './api';
 import { searchPlaces, reverseGeocode, type Place } from './geocode';
+import { resolvePhotoUrl, storePhoto } from './photo-storage';
 import { geohashBounds } from './geo';
 import { signInWithSimulatedVault, signInWithVault, vaultStatusText } from './identity';
 
@@ -68,7 +69,7 @@ async function busy(button: HTMLButtonElement | null, action: () => Promise<void
 
 $('#app').innerHTML = `
   <header>
-    <h1>HoloAirBNB</h1>
+    <h1>HoloHomes</h1>
     <span id="me" class="chip">Connecting…</span>
     <div id="identity"></div>
   </header>
@@ -136,6 +137,16 @@ $('#app').innerHTML = `
           <label>Title <input name="listingTitle" required maxlength="120" placeholder="Sunny loft in Baixa" /></label>
           <label>Description <textarea name="description" maxlength="5000"></textarea></label>
           <label>Max guests <input name="guests" type="number" min="1" max="50" value="2" /></label>
+          <label>
+            Photos
+            <input
+              name="photos"
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/avif"
+              multiple
+            />
+          </label>
+          <p class="meta">Choose up to 10 photos. The first photo is used as the cover.</p>
           <p id="listing-preview" class="meta"></p>
           <button>Publish listing</button>
         </form>
@@ -156,17 +167,27 @@ $('#app').innerHTML = `
 
 let picked: GeoPoint = { lat: 38.7075, lng: -9.1364 };
 const map = L.map('map').setView([picked.lat, picked.lng], 13);
+
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 19,
   attribution: '&copy; OpenStreetMap contributors',
 }).addTo(map);
-const pickMarker = L.circleMarker([picked.lat, picked.lng], { radius: 7, color: '#1d1b18', fillOpacity: 1 }).addTo(map);
+
+const pickMarker = L.circleMarker(
+  [picked.lat, picked.lng],
+  { radius: 7, color: '#1d1b18', fillOpacity: 1 },
+).addTo(map);
+
 const searchLayer = L.layerGroup().addTo(map);
 
 let api: Api;
+let apiReady: Promise<Api>;
 
 map.on('click', (event: L.LeafletMouseEvent) => {
-  pick({ lat: event.latlng.lat, lng: ((event.latlng.lng + 540) % 360) - 180 });
+  pick({
+    lat: event.latlng.lat,
+    lng: ((event.latlng.lng + 540) % 360) - 180,
+  });
 });
 
 let reverseGeocodeAbort: AbortController | undefined;
@@ -174,10 +195,16 @@ let reverseGeocodeAbort: AbortController | undefined;
 function pick(point: GeoPoint, recenter = false) {
   picked = point;
   pickMarker.setLatLng([picked.lat, picked.lng]);
-  if (recenter) map.setView([picked.lat, picked.lng], Math.max(map.getZoom(), 13));
+
+  if (recenter) {
+    map.setView(
+      [picked.lat, picked.lng],
+      Math.max(map.getZoom(), 13),
+    );
+  }
+
   showPicked();
 }
-
 function showPicked() {
   const coords = `${picked.lat.toFixed(5)}, ${picked.lng.toFixed(5)}`;
   $('#picked').textContent = coords;
@@ -390,6 +417,13 @@ function drawSearch(matches: ListingMatch[], radiusKm: number, cells: { geohash_
 /** Keyed by base64 listing hash, so the booking form can check dates against busy_ranges. */
 const currentMatches = new Map<string, ListingMatch>();
 
+let detailListingHash: string | null = null;
+let detailBusyRanges: BusyRange[] = [];
+let detailPhotos: ListingPhoto[] = [];
+let detailCalendarMonth = new Date();
+let detailCheckIn: string | null = null;
+let detailCheckOut: string | null = null;
+
 function ratingLine(rating: RatingOverview) {
   if (rating.review_count === 0) return '<span class="muted">No reviews yet</span>';
   return `<span class="stars">${stars(Math.round(rating.average_rating ?? 0))}</span> ${rating.average_rating?.toFixed(1)} (${rating.review_count})`;
@@ -412,48 +446,410 @@ function overlapsBusy(checkIn: number, checkOut: number, ranges: BusyRange[]) {
 function renderResults(matches: ListingMatch[]) {
   const results = $('#results');
   currentMatches.clear();
+  detailListingHash = null;
+
   if (matches.length === 0) {
     results.innerHTML = '<p class="muted">Nothing here yet. Publish a listing from the Host tab (in another agent window).</p>';
     return;
   }
+
   results.innerHTML = matches
     .map((match) => {
       const { listing } = match;
       const hash = b64(match.listing_hash);
       currentMatches.set(hash, match);
       const bookedNow = isBookedRightNow(match.busy_ranges);
+
       return `
         <article class="card${bookedNow ? ' currently-booked' : ''}" data-listing="${hash}">
           <div class="row" style="margin:0">
             <h3>${esc(listing.title)}</h3>
             ${bookedNow ? '<span class="chip">Currently booked</span>' : ''}
           </div>
+
           ${listing.description ? `<p>${esc(listing.description)}</p>` : ''}
+
           <p class="meta">${ratingLine(match.rating)}</p>
+
           <p class="meta">
-            Haversine <strong>${distance(match.haversine_km)}</strong> · Euclidean ${distance(match.euclidean_km)}
-            · up to ${listing.max_guests} guests<br />
-            geohash <code>${listing.geohash}</code> · H3 <code>${listing.h3_cell}</code>
+            Haversine <strong>${distance(match.haversine_km)}</strong> ·
+            Euclidean ${distance(match.euclidean_km)} ·
+            up to ${listing.max_guests} guests
           </p>
+
           <p class="meta">${busyRangeText(match.busy_ranges)}</p>
-          <details class="reviews"><summary>Reviews</summary><div class="reviews-body muted">Loading…</div></details>
-          <form class="book">
-            <div class="grid2">
-              <label>Check-in <input name="checkIn" type="date" value="${isoDay(-3)}" required /></label>
-              <label>Check-out <input name="checkOut" type="date" value="${isoDay(-1)}" required /></label>
-            </div>
-            <div class="grid2">
-              <label>Guests <input name="guests" type="number" min="1" max="${listing.max_guests}" value="1" /></label>
-              <label>Message <input name="message" placeholder="Hi!" /></label>
-            </div>
-            <p class="meta booking-warning" hidden></p>
-            <p class="meta">Past dates are allowed, so you can try reviews straight away.</p>
-            <button>Request booking</button>
-          </form>
+
+          <div class="detail-actions">
+            <button type="button" data-action="open-detail">
+              View listing
+            </button>
+            <details class="reviews">
+              <summary>Reviews</summary>
+              <div class="reviews-body muted">Loading…</div>
+            </details>
+          </div>
         </article>`;
     })
     .join('');
 }
+
+function calendarMonthLabel(date: Date) {
+  return date.toLocaleDateString(undefined, {
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'UTC',
+  });
+}
+
+function dateKey(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function dayBusy(day: string, ranges: BusyRange[]) {
+  const start = dayToMicros(day);
+  const end = start + 86_400_000_000;
+  return ranges.some((range) => start < range.check_out && range.check_in < end);
+}
+
+function renderCalendar() {
+  const monthStart = new Date(Date.UTC(
+    detailCalendarMonth.getUTCFullYear(),
+    detailCalendarMonth.getUTCMonth(),
+    1,
+  ));
+
+  const firstWeekday = monthStart.getUTCDay();
+  const daysInMonth = new Date(
+    Date.UTC(
+      detailCalendarMonth.getUTCFullYear(),
+      detailCalendarMonth.getUTCMonth() + 1,
+      0,
+    ),
+  ).getUTCDate();
+
+  const today = isoDay(0);
+  const cells: string[] = [];
+
+  for (let i = 0; i < firstWeekday; i += 1) {
+    cells.push('<td><button type="button" class="calendar-day outside" disabled></button></td>');
+  }
+
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    const date = new Date(Date.UTC(
+      detailCalendarMonth.getUTCFullYear(),
+      detailCalendarMonth.getUTCMonth(),
+      day,
+    ));
+
+    const key = dateKey(date);
+    const busyDay = dayBusy(key, detailBusyRanges);
+    const selected =
+      key === detailCheckIn ||
+      key === detailCheckOut;
+
+    const inRange =
+      detailCheckIn !== null &&
+      detailCheckOut !== null &&
+      key > detailCheckIn &&
+      key < detailCheckOut;
+
+    const classes = [
+      'calendar-day',
+      busyDay ? 'busy' : '',
+      selected ? 'selected' : '',
+      inRange ? 'in-range' : '',
+      key === today ? 'today' : '',
+    ].filter(Boolean).join(' ');
+
+    cells.push(`
+      <td>
+        <button
+          type="button"
+          class="${classes}"
+          data-calendar-day="${key}"
+          ${busyDay || key < today ? 'disabled' : ''}
+        >${day}</button>
+      </td>
+    `);
+  }
+
+  while (cells.length % 7 !== 0) {
+    cells.push('<td><button type="button" class="calendar-day outside" disabled></button></td>');
+  }
+
+  const rows: string[] = [];
+  for (let i = 0; i < cells.length; i += 7) {
+    rows.push(`<tr>${cells.slice(i, i + 7).join('')}</tr>`);
+  }
+
+  const calendar = $('.availability-calendar', $('#results'));
+  if (!calendar) return;
+
+  calendar.innerHTML = `
+    <thead>
+      <tr>
+        ${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+          .map((day) => `<th>${day}</th>`)
+          .join('')}
+      </tr>
+    </thead>
+    <tbody>${rows.join('')}</tbody>
+  `;
+
+  const label = $('.calendar-month-label', $('#results'));
+  if (label) label.textContent = calendarMonthLabel(detailCalendarMonth);
+
+  const summary = $('.booking-summary', $('#results'));
+  if (summary) {
+    if (!detailCheckIn) {
+      summary.innerHTML = '<strong>Select your check-in date.</strong>';
+    } else if (!detailCheckOut) {
+      summary.innerHTML = `<strong>Check-in:</strong> ${detailCheckIn} · Select your check-out date.`;
+    } else {
+      summary.innerHTML =
+        `<strong>${detailCheckIn}</strong> → <strong>${detailCheckOut}</strong>`;
+    }
+  }
+
+  const checkIn = $<HTMLInputElement>('[name="checkIn"]', $('#results'));
+  const checkOut = $<HTMLInputElement>('[name="checkOut"]', $('#results'));
+
+  if (checkIn) checkIn.value = detailCheckIn ?? '';
+  if (checkOut) checkOut.value = detailCheckOut ?? '';
+}
+
+async function openListingDetail(listingHash: string) {
+  const match = currentMatches.get(listingHash);
+  if (!match) return;
+
+  detailListingHash = listingHash;
+  detailBusyRanges = match.busy_ranges;
+  detailPhotos = await api.getListingPhotos(decodeHashFromBase64(listingHash));
+  detailCalendarMonth = new Date();
+  detailCalendarMonth.setUTCDate(1);
+  detailCheckIn = null;
+  detailCheckOut = null;
+
+  const results = $('#results');
+  const listing = match.listing;
+
+  const resolvedPhotos = await Promise.all(
+    detailPhotos.map(async (photo) => ({
+      photo,
+      url: await resolvePhotoUrl(photo.storage_url),
+    })),
+  );
+
+  results.innerHTML = `
+    <div class="detail-shell">
+      <div class="detail-header">
+        <button type="button" class="ghost detail-back" data-action="back-results">
+          ← Back
+        </button>
+        <div>
+          <h2 class="detail-title">${esc(listing.title)}</h2>
+          <p class="meta">${ratingLine(match.rating)}</p>
+        </div>
+      </div>
+
+      <article class="card">
+        ${
+          detailPhotos.length
+            ? `
+              <div class="detail-photo-gallery">
+                ${resolvedPhotos
+                  .filter(({ url }) => url)
+                  .map(
+                    ({ photo, url }) => `
+                      <figure class="detail-photo">
+                        <img
+                          src="${esc(url!)}"
+                          alt="${esc(photo.caption || listing.title)}"
+                          loading="lazy"
+                        />
+                        ${
+                          photo.caption
+                            ? `<figcaption>${esc(photo.caption)}</figcaption>`
+                            : ''
+                        }
+                      </figure>
+                    `,
+                  )
+                  .join('')}
+              </div>
+            `
+            : '<div class="detail-photo-empty">No photos yet.</div>'
+        }
+
+        ${
+          listing.description
+            ? `<p class="detail-description">${esc(listing.description)}</p>`
+            : '<p class="muted">No description provided.</p>'
+        }
+
+        <div class="detail-location">
+          <span>${distance(match.haversine_km)} away</span>
+          <span>Up to ${listing.max_guests} guests</span>
+          <span>${listing.location.lat.toFixed(4)}, ${listing.location.lng.toFixed(4)}</span>
+        </div>
+
+        <div class="detail-section">
+          <h3>Availability</h3>
+
+          <div class="calendar-controls">
+            <button type="button" class="ghost" data-calendar-nav="-1">←</button>
+            <strong class="calendar-month-label"></strong>
+            <button type="button" class="ghost" data-calendar-nav="1">→</button>
+          </div>
+
+          <table class="availability-calendar"></table>
+
+          <div class="booking-summary">
+            <strong>Select your check-in date.</strong>
+          </div>
+
+          <form class="detail-booking">
+            <input type="hidden" name="checkIn" />
+            <input type="hidden" name="checkOut" />
+
+            <div class="grid2">
+              <label>
+                Guests
+                <input
+                  name="guests"
+                  type="number"
+                  min="1"
+                  max="${listing.max_guests}"
+                  value="1"
+                  required
+                />
+              </label>
+
+              <label>
+                Message
+                <input name="message" placeholder="Hi!" />
+              </label>
+            </div>
+
+            <p class="meta booking-warning" hidden></p>
+
+            <div class="detail-actions">
+              <button type="submit">Request booking</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="detail-section">
+          <h3>Confirmed bookings</h3>
+          <p class="meta">${busyRangeText(match.busy_ranges)}</p>
+        </div>
+
+        <div class="detail-section">
+          <h3>Reviews</h3>
+          <div class="detail-reviews muted">Loading…</div>
+        </div>
+      </article>
+    </div>
+  `;
+
+  renderCalendar();
+
+  try {
+    await renderReviews(
+      match.listing_hash,
+      $('.detail-reviews', results),
+    );
+  } catch {
+    // renderReviews already displays its own error.
+  }
+}
+
+$('#results').addEventListener('click', (event) => {
+  const target = event.target as HTMLElement;
+  const actionButton = target.closest<HTMLButtonElement>('button[data-action]');
+  const dayButton = target.closest<HTMLButtonElement>('[data-calendar-day]');
+  const navButton = target.closest<HTMLButtonElement>('[data-calendar-nav]');
+
+  if (actionButton?.dataset.action === 'open-detail') {
+    const listingHash = actionButton.closest<HTMLElement>('[data-listing]')?.dataset.listing;
+    if (listingHash) void openListingDetail(listingHash);
+    return;
+  }
+
+  if (actionButton?.dataset.action === 'back-results') {
+    const matches = Array.from(currentMatches.values());
+    renderResults(matches);
+    return;
+  }
+
+  if (navButton && detailListingHash) {
+    detailCalendarMonth.setUTCMonth(
+      detailCalendarMonth.getUTCMonth() + Number(navButton.dataset.calendarNav),
+    );
+    renderCalendar();
+    return;
+  }
+
+  if (dayButton && detailListingHash) {
+    const day = dayButton.dataset.calendarDay!;
+    if (detailCheckIn === null || detailCheckOut !== null) {
+      detailCheckIn = day;
+      detailCheckOut = null;
+    } else if (day > detailCheckIn) {
+      detailCheckOut = day;
+    } else {
+      detailCheckIn = day;
+      detailCheckOut = null;
+    }
+
+    renderCalendar();
+  }
+});
+
+$('#results').addEventListener('submit', (event) => {
+  const form = event.target as HTMLFormElement;
+  if (!form.classList.contains('detail-booking')) return;
+
+  event.preventDefault();
+
+  if (!detailListingHash) return;
+
+  if (!detailCheckIn || !detailCheckOut) {
+    toast('Select both check-in and check-out dates.', true);
+    return;
+  }
+
+  const checkIn = dayToMicros(detailCheckIn);
+  const checkOut = dayToMicros(detailCheckOut);
+
+  if (checkOut <= checkIn) {
+    toast('Check-out must be after check-in.', true);
+    return;
+  }
+
+  if (overlapsBusy(checkIn, checkOut, detailBusyRanges)) {
+    toast('These dates overlap a confirmed booking.', true);
+    return;
+  }
+
+  const match = currentMatches.get(detailListingHash);
+  if (!match) return;
+
+  busy($<HTMLButtonElement>('button[type="submit"]', form), async () => {
+    await api.requestBooking({
+      listing_hash: match.listing_hash,
+      check_in: checkIn,
+      check_out: checkOut,
+      guests: Number(
+        $<HTMLInputElement>('[name="guests"]', form).value,
+      ),
+      message: $<HTMLInputElement>('[name="message"]', form).value,
+    });
+
+    toast('Booking requested. The host sees it under Host → My listings.');
+  });
+});
+
 
 /** Warns (and blocks submit) when the chosen dates overlap a busy range already known
  * from the last search. The host's own accept step still enforces this for real — this
@@ -544,14 +940,38 @@ const listingForm = $<HTMLFormElement>('#listing-form');
 listingForm.addEventListener('submit', (event) => {
   event.preventDefault();
   busy($<HTMLButtonElement>('button', listingForm), async () => {
-    await api.createListing({
+    const connectedApi = await apiReady;
+    const photoInput = $<HTMLInputElement>('input[name="photos"]', listingForm);
+    const files = Array.from(photoInput.files ?? []).slice(0, 10);
+
+    const listingRecord = await connectedApi.createListing({
       title: listingForm.listingTitle.value,
       description: listingForm.description.value,
       location: picked,
       max_guests: Number(listingForm.guests.value),
     });
+
+    const listingHash = listingRecord.signed_action.hashed.hash;
+
+    for (const [index, file] of files.entries()) {
+      const stored = await storePhoto(file);
+
+      await connectedApi.addListingPhoto({
+        listing_hash: listingHash,
+        storage_url: stored.storageUrl,
+        content_hash: stored.contentHash,
+        caption: '',
+        sort_order: index,
+        is_cover: index === 0,
+      });
+    }
+
     listingForm.reset();
-    toast('Listing published');
+    toast(
+      files.length
+        ? `Listing published with ${files.length} photo${files.length === 1 ? '' : 's'}`
+        : 'Listing published',
+    );
     await loadMyListings();
   });
 });
@@ -638,14 +1058,15 @@ $('#refresh-trips').addEventListener('click', () => loadMyTrips());
 async function loadMyTrips() {
   const container = $('#my-trips');
   try {
-    const bookings = await api.getMyBookings();
+    const connectedApi = await apiReady;
+    const bookings = await connectedApi.getMyBookings();
     if (bookings.length === 0) {
       container.innerHTML = '<p class="muted">No bookings yet. Search on the Explore tab and request one.</p>';
       return;
     }
     const cards = await Promise.all(
       bookings.map(async (view) => {
-        const listingRecord = await api.getListing(view.request.listing_hash);
+        const listingRecord = await connectedApi.getListing(view.request.listing_hash);
         const title = listingRecord ? decodeEntry<Listing>(listingRecord).title : 'Listing not synced yet';
         const canReview = view.response?.decision === 'Accepted';
         return `
@@ -690,8 +1111,10 @@ $('#my-trips').addEventListener('submit', (event) => {
 
 async function start() {
   showPicked();
+
+  apiReady = Api.connect();
   try {
-    api = await Api.connect();
+    api = await apiReady;
   } catch (error) {
     $('#me').textContent = 'Not connected to Holochain';
     toast(`Could not connect to the conductor: ${errorMessage(error)}. Launch with "npm start".`, true);

@@ -1,5 +1,6 @@
 pub mod booking;
 pub mod listing;
+pub mod photo;
 pub mod review;
 pub mod search;
 

@@ -27,6 +27,7 @@ macro_rules! reject_if {
 pub mod booking;
 pub mod geo_index;
 pub mod listing;
+pub mod photo;
 pub mod review;
 
 pub use booking::*;
@@ -34,6 +35,7 @@ pub use geo_index::*;
 pub use geo_utils;
 pub use identity_attestation;
 pub use listing::*;
+pub use photo::*;
 pub use review::*;
 
 #[derive(Serialize, Deserialize)]
@@ -42,6 +44,7 @@ pub use review::*;
 #[unit_enum(UnitEntryTypes)]
 pub enum EntryTypes {
     Listing(Listing),
+    ListingPhoto(ListingPhoto),
     BookingRequest(BookingRequest),
     BookingResponse(BookingResponse),
     Review(Review),
@@ -56,6 +59,8 @@ pub enum LinkTypes {
     H3CellToListing,
     /// Host agent → listing create action.
     HostToListings,
+    /// Listing create action → photo metadata entry.
+    ListingToPhotos,
     /// Listing create action → each of its update actions.
     ListingUpdates,
     /// Listing create action → booking request.
@@ -175,6 +180,7 @@ fn validate_entry_content(
 ) -> ExternResult<ValidateCallbackResult> {
     match entry {
         EntryTypes::Listing(listing) => validate_listing(listing),
+        EntryTypes::ListingPhoto(photo) => validate_listing_photo(photo),
         EntryTypes::BookingRequest(request) => validate_booking_request(action, request),
         EntryTypes::BookingResponse(response) => validate_booking_response(action, response),
         EntryTypes::Review(review) => validate_review(action, review),
@@ -202,6 +208,9 @@ fn validate_update(
         }
         EntryTypes::BookingResponse(_) => invalid("Booking responses are final"),
         EntryTypes::Review(_) => invalid("Reviews cannot be edited"),
+        EntryTypes::ListingPhoto(_) => {
+            invalid("Listing photos cannot be edited; delete and add a new photo")
+        }
     }
 }
 
@@ -216,9 +225,9 @@ fn validate_delete(action: TypedAction<DeleteData>) -> ExternResult<ValidateCall
         "Only the original author can delete this entry"
     );
     match entry {
-        EntryTypes::Listing(_) | EntryTypes::BookingRequest(_) => {
-            Ok(ValidateCallbackResult::Valid)
-        }
+        EntryTypes::Listing(_)
+        | EntryTypes::ListingPhoto(_)
+        | EntryTypes::BookingRequest(_) => Ok(ValidateCallbackResult::Valid),
         EntryTypes::BookingResponse(_) => invalid("Booking responses are permanent"),
         EntryTypes::Review(_) => invalid("Reviews are permanent"),
     }
@@ -247,6 +256,26 @@ fn validate_create_link(
                 record.action().author() != &author,
                 "Hosts can only index their own listings"
             );
+            Ok(ValidateCallbackResult::Valid)
+        }
+        LinkTypes::ListingToPhotos => {
+            let Some(base) = action.base_address.clone().into_action_hash() else {
+                return invalid("ListingToPhotos links must start from a listing");
+            };
+
+            let (listing_record, _) = check!(must_get_listing(&base)?);
+            let (photo_record, photo) = check!(must_get_listing_photo(&target)?);
+
+            reject_if!(
+                photo.listing_hash != base,
+                "Photo metadata must reference the listing it is linked from"
+            );
+            reject_if!(
+                listing_record.action().author() != &author
+                    || photo_record.action().author() != &author,
+                "Only the listing host can add photos to their listing"
+            );
+
             Ok(ValidateCallbackResult::Valid)
         }
         LinkTypes::ListingUpdates => {
@@ -375,6 +404,7 @@ macro_rules! typed_getter {
 }
 
 typed_getter!(must_get_listing, Listing, "listing");
+typed_getter!(must_get_listing_photo, ListingPhoto, "listing photo");
 typed_getter!(must_get_booking_request, BookingRequest, "booking request");
 typed_getter!(must_get_booking_response, BookingResponse, "booking response");
 typed_getter!(must_get_review, Review, "review");

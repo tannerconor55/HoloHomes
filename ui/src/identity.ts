@@ -31,7 +31,7 @@ export async function signInWithVault(api: Api): Promise<ActionHash> {
     throw new Error('Set VITE_FLOWSTA_CLIENT_ID in ui/.env first (register the app at dev.flowsta.com).');
   }
   const { payload } = await linkFlowstaIdentity({
-    appName: 'HoloAirBNB',
+    appName: 'HoloHomes',
     clientId: FLOWSTA_CLIENT_ID,
     localAgentPubKey: encodeHashToBase64(api.myAgent),
   });

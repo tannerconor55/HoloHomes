@@ -8,6 +8,18 @@ import { decode } from '@msgpack/msgpack';
 
 const ROLE = 'rentals';
 
+type HolochainLauncherEnv = {
+  APP_INTERFACE_PORT: number;
+  INSTALLED_APP_ID: string;
+  APP_INTERFACE_TOKEN: number[];
+};
+
+declare global {
+  interface Window {
+    __HC_LAUNCHER_ENV__?: HolochainLauncherEnv;
+  }
+}
+
 // Mirrors of the Rust types in dnas/rentals/zomes. Keep them in step with the zome code.
 
 export type GeoPoint = { lat: number; lng: number };
@@ -23,6 +35,15 @@ export type Listing = {
   h3_cell: string;
   max_guests: number;
   status: ListingStatus;
+};
+
+export type ListingPhoto = {
+  listing_hash: ActionHash;
+  storage_url: string;
+  content_hash: string;
+  caption: string;
+  sort_order: number;
+  is_cover: boolean;
 };
 
 export type ListingView = { listing_hash: ActionHash; record: HcRecord; listing: Listing };
@@ -107,7 +128,20 @@ export class Api {
   private constructor(private readonly client: AppWebsocket) {}
 
   static async connect(): Promise<Api> {
-    return new Api(await AppWebsocket.connect());
+    const launcher = window.__HC_LAUNCHER_ENV__;
+
+    if (!launcher) {
+      throw new Error(
+        'HoloHomes must be launched by hc-spin so the Holochain app interface is available.',
+      );
+    }
+
+    const client = await AppWebsocket.connect({
+      url: new URL(`ws://localhost:${launcher.APP_INTERFACE_PORT}`),
+      token: launcher.APP_INTERFACE_TOKEN,
+    });
+
+    return new Api(client);
   }
 
   get myAgent(): AgentPubKey {
@@ -137,6 +171,19 @@ export class Api {
   }
   getMyListings() {
     return this.call<ListingView[]>('rentals', 'get_my_listings');
+  }
+  addListingPhoto(input: {
+    listing_hash: ActionHash;
+    storage_url: string;
+    content_hash: string;
+    caption: string;
+    sort_order: number;
+    is_cover: boolean;
+  }) {
+    return this.call<HcRecord>('rentals', 'add_listing_photo', input);
+  }
+  getListingPhotos(listingHash: ActionHash) {
+    return this.call<ListingPhoto[]>('rentals', 'get_listing_photos', listingHash);
   }
   searchListings(input: { center: GeoPoint; radius_km: number; method: SearchMethod } & SearchFilters) {
     return this.call<SearchOutput>('rentals', 'search_listings', {

@@ -19,4 +19,10 @@ if [ "${XDG_SESSION_TYPE:-}" = "wayland" ]; then
   export LIBGL_ALWAYS_SOFTWARE=1
 fi
 
+# Some Linux GPU/VA-API combinations cause Electron/Chromium to
+# blocklist WebGL2 or crash its GPU process. HoloHomes uses MapLibre,
+# so force Chromium onto the software ANGLE renderer for the dev launcher.
+
+export ELECTRON_EXTRA_LAUNCH_ARGS="--use-angle=swiftshader --enable-unsafe-swiftshader"
+
 exec hc-spin "$@"
