@@ -380,14 +380,10 @@ searchForm.addEventListener('submit', (event) => {
       available_check_in: availFrom ? dayToMicros(availFrom) : null,
       available_check_out: availTo ? dayToMicros(availTo) : null,
     });
-    drawSearch(output.matches, radius, searchForm.cells.checked ? output : null);
+    drawSearch(output.matches, radius, null);
     $('#search-meta').innerHTML = `
       <p class="meta">
-        ${output.matches.length} listing(s) within ${radius} km.
-        ${output.geohash_precision !== null ? `Read ${output.geohash_cells.length} geohash cells (precision ${output.geohash_precision}).` : ''}
-        ${output.h3_resolution !== null ? `Read ${output.h3_cells.length} H3 cells (resolution ${output.h3_resolution}).` : ''}
-        ${output.coverage_complete ? '' : '<strong>Radius exceeds the index; some listings may be missing.</strong>'}
-        <span class="legend"><span style="background:var(--geohash)"></span>geohash<span style="background:var(--h3)"></span>H3</span>
+        ${output.matches.length} ${output.matches.length === 1 ? 'listing' : 'listings'} within ${radius} km.
       </p>`;
     renderResults(output.matches);
   });
@@ -443,54 +439,139 @@ function overlapsBusy(checkIn: number, checkOut: number, ranges: BusyRange[]) {
   return ranges.some((r) => checkIn < r.check_out && r.check_in < checkOut);
 }
 
-function renderResults(matches: ListingMatch[]) {
+async function renderResults(matches: ListingMatch[]) {
   const results = $('#results');
   currentMatches.clear();
   detailListingHash = null;
 
   if (matches.length === 0) {
-    results.innerHTML = '<p class="muted">Nothing here yet. Publish a listing from the Host tab (in another agent window).</p>';
+    results.innerHTML =
+      '<p class="muted">Nothing here yet. Publish a listing from the Host tab (in another agent window).</p>';
     return;
   }
 
-  results.innerHTML = matches
-    .map((match) => {
+  const cards = await Promise.all(
+    matches.map(async (match) => {
       const { listing } = match;
       const hash = b64(match.listing_hash);
       currentMatches.set(hash, match);
+
       const bookedNow = isBookedRightNow(match.busy_ranges);
 
+      let photos: { url: string; caption: string }[] = [];
+
+      try {
+        const listingPhotos = await api.getListingPhotos(match.listing_hash);
+
+        const resolved = await Promise.all(
+          listingPhotos
+            .sort((a, b) => {
+              if (a.is_cover !== b.is_cover) return a.is_cover ? -1 : 1;
+              return a.sort_order - b.sort_order;
+            })
+            .map(async (photo) => ({
+              photo,
+              url: await resolvePhotoUrl(photo.storage_url),
+            })),
+        );
+
+        photos = resolved
+          .filter(({ url }) => url)
+          .map(({ photo, url }) => ({
+            url: url!,
+            caption: photo.caption,
+          }));
+      } catch {
+        // Keep the listing visible even if photos cannot be resolved.
+      }
+
+      const photoSlides = photos.length
+        ? photos
+            .map(
+              (photo, index) => `
+                <img
+                  class="listing-card-slide${index === 0 ? ' active' : ''}"
+                  src="${esc(photo.url)}"
+                  alt="${esc(photo.caption || listing.title)}"
+                  data-photo-index="${index}"
+                  loading="${index === 0 ? 'eager' : 'lazy'}"
+                />
+              `,
+            )
+            .join('')
+        : `
+            <div class="listing-card-no-photo">
+              <span>No photo</span>
+            </div>
+          `;
+
       return `
-        <article class="card${bookedNow ? ' currently-booked' : ''}" data-listing="${hash}">
-          <div class="row" style="margin:0">
-            <h3>${esc(listing.title)}</h3>
-            ${bookedNow ? '<span class="chip">Currently booked</span>' : ''}
+        <article class="card listing-card${bookedNow ? ' currently-booked' : ''}" data-listing="${hash}">
+          <div class="listing-card-gallery" data-photo-index="0">
+            <div class="listing-card-slides">
+              ${photoSlides}
+            </div>
+
+            ${
+              photos.length > 1
+                ? `
+                  <button
+                    type="button"
+                    class="listing-photo-nav listing-photo-prev"
+                    data-action="previous-photo"
+                    aria-label="Previous photo"
+                  >‹</button>
+
+                  <button
+                    type="button"
+                    class="listing-photo-nav listing-photo-next"
+                    data-action="next-photo"
+                    aria-label="Next photo"
+                  >›</button>
+
+                  <span class="listing-photo-count">1 / ${photos.length}</span>
+                `
+                : ''
+            }
           </div>
 
-          ${listing.description ? `<p>${esc(listing.description)}</p>` : ''}
+          <div class="listing-card-content">
+            <div class="listing-card-title-row">
+              <h3>${esc(listing.title)}</h3>
+              ${bookedNow ? '<span class="chip">Currently booked</span>' : ''}
+            </div>
 
-          <p class="meta">${ratingLine(match.rating)}</p>
+            <p class="listing-card-rating">
+              ${ratingLine(match.rating)}
+            </p>
 
-          <p class="meta">
-            Haversine <strong>${distance(match.haversine_km)}</strong> ·
-            Euclidean ${distance(match.euclidean_km)} ·
-            up to ${listing.max_guests} guests
-          </p>
+            <p class="listing-card-location">
+              ${distance(match.haversine_km)} away · up to ${listing.max_guests} guests
+            </p>
 
-          <p class="meta">${busyRangeText(match.busy_ranges)}</p>
+            ${
+              listing.description
+                ? `<p class="listing-card-description">${esc(listing.description)}</p>`
+                : ''
+            }
 
-          <div class="detail-actions">
-            <button type="button" data-action="open-detail">
-              View listing
-            </button>
-            <details class="reviews">
-              <summary>Reviews</summary>
-              <div class="reviews-body muted">Loading…</div>
-            </details>
+            <div class="listing-card-footer">
+              <span class="listing-card-availability">
+                ${bookedNow ? 'Currently booked' : 'Available'}
+              </span>
+
+              <button type="button" data-action="open-detail">
+                View listing
+              </button>
+            </div>
+
+
           </div>
         </article>`;
-    })
-    .join('');
+    }),
+  );
+
+  results.innerHTML = cards.join('');
 }
 
 function calendarMonthLabel(date: Date) {
@@ -769,6 +850,32 @@ $('#results').addEventListener('click', (event) => {
   const actionButton = target.closest<HTMLButtonElement>('button[data-action]');
   const dayButton = target.closest<HTMLButtonElement>('[data-calendar-day]');
   const navButton = target.closest<HTMLButtonElement>('[data-calendar-nav]');
+
+  if (
+    actionButton?.dataset.action === 'previous-photo' ||
+    actionButton?.dataset.action === 'next-photo'
+  ) {
+    const card = actionButton.closest<HTMLElement>('.listing-card');
+    const gallery = card?.querySelector<HTMLElement>('.listing-card-gallery');
+    const slides = gallery?.querySelectorAll<HTMLImageElement>('.listing-card-slide');
+
+    if (!gallery || !slides || slides.length < 2) return;
+
+    const current = Number(gallery.dataset.photoIndex ?? '0');
+    const direction = actionButton.dataset.action === 'next-photo' ? 1 : -1;
+    const next = (current + direction + slides.length) % slides.length;
+
+    slides[current].classList.remove('active');
+    slides[next].classList.add('active');
+    gallery.dataset.photoIndex = String(next);
+
+    const counter = gallery.querySelector<HTMLElement>('.listing-photo-count');
+    if (counter) {
+      counter.textContent = `${next + 1} / ${slides.length}`;
+    }
+
+    return;
+  }
 
   if (actionButton?.dataset.action === 'open-detail') {
     const listingHash = actionButton.closest<HTMLElement>('[data-listing]')?.dataset.listing;

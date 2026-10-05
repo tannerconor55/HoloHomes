@@ -357,3 +357,153 @@ details summary { cursor: pointer; font-size: 0.85rem; }
   text-align: center;
   color: var(--muted);
 }
+
+.listing-card {
+  display: grid;
+  grid-template-columns: minmax(210px, 30%) 1fr;
+  gap: 0;
+  overflow: hidden;
+  padding: 0;
+}
+
+.listing-card-gallery {
+  position: relative;
+  min-width: 0;
+  background: var(--surface-muted, #f3f1ec);
+  overflow: hidden;
+}
+
+.listing-card-slides {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 165px;
+}
+
+.listing-card-slide {
+  display: none;
+  width: 100%;
+  height: 100%;
+  min-height: 165px;
+  object-fit: cover;
+}
+
+.listing-card-slide.active {
+  display: block;
+}
+
+.listing-card-no-photo {
+  display: grid;
+  place-items: center;
+  min-height: 165px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.listing-photo-nav {
+  position: absolute;
+  top: 50%;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  transform: translateY(-50%);
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.92);
+  color: #1d1b18;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  font-size: 1.35rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.listing-photo-nav:hover {
+  background: white;
+}
+
+.listing-photo-prev {
+  left: 0.65rem;
+}
+
+.listing-photo-next {
+  right: 0.65rem;
+}
+
+.listing-photo-count {
+  position: absolute;
+  right: 0.65rem;
+  bottom: 0.65rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.62);
+  color: white;
+  font-size: 0.75rem;
+}
+
+.listing-card-content {
+  min-width: 0;
+  padding: 1rem 1.15rem;
+}
+
+.listing-card-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.listing-card-title-row h3 {
+  margin: 0;
+}
+
+.listing-card-rating,
+.listing-card-location {
+  margin: 0.45rem 0 0;
+}
+
+.listing-card-location {
+  color: var(--muted);
+}
+
+.listing-card-description {
+  display: -webkit-box;
+  margin: 0.65rem 0 0;
+  overflow: hidden;
+  color: var(--muted);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.listing-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 0.9rem;
+}
+
+.listing-card-availability {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.listing-card .reviews {
+  margin-top: 0.65rem;
+}
+
+@media (max-width: 700px) {
+  .listing-card {
+    grid-template-columns: 1fr;
+  }
+
+  .listing-card-gallery,
+  .listing-card-slides,
+  .listing-card-slide {
+    min-height: 190px;
+    height: 190px;
+  }
+
+  .listing-card-content {
+    padding: 0.9rem 1rem 1rem;
+  }
+}
